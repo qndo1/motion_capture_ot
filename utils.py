@@ -116,6 +116,39 @@ def vertices_to_pointcloud(vertices, faces, n_points=1_000, return_mesh = False)
         return points, mesh
     else:
         return points
+    
+def mesh_from_path(path, idx = 0):
+    verts, faces = true_verts_from_path(path, return_faces = True)
+
+    verts = verts.detach().numpy()
+    
+    mesh = trimesh.Trimesh(
+        vertices = verts[idx],
+        faces = faces,
+        process = False
+    )
+
+    return mesh
+
+def meshes_from_path(path):
+    verts, faces = true_verts_from_path(path, return_faces = True)
+
+    verts = verts.detach().numpy()
+
+    meshes = []
+
+    for i in range(verts.shape[0]):
+        meshes.append(trimesh.Trimesh(
+            vertices = verts[i],
+            faces = faces,
+            process = False
+        ))
+    
+    return meshes
+
+def sampled_verts_from_mesh(mesh, n_points = 1_000):
+    points, _ = trimesh.sample.sample_surface(mesh, n_points)
+    return points
 
 def sampled_verts_from_path(amass_npz_path, idx = None, n_points = 1_000, return_mesh = False):
     
@@ -215,3 +248,39 @@ def remove_occluded_points(points, mesh, camera):
     visible_points = points[visible]
 
     return visible_points
+
+def get_walk_run_meshes(file_dict = None):
+    dataset_path = "datasets/action_smplx_models"
+
+    if file_dict is None:
+        file_dict = {
+            "walk": [
+                "female_walk.npz",
+                "male_walk_turn_left_90.npz"
+            ],
+            "run": [
+                "female_run.npz",
+                "male_run.npz"
+            ]
+        }
+
+    walk_meshes = []
+    run_meshes = []
+
+    for file in file_dict["walk"]:
+        print(file)
+        this_path = dataset_path + "/" + file
+        walk_meshes = walk_meshes + meshes_from_path(this_path)
+    
+    for file in file_dict["run"]:
+        print(file)
+        this_path = dataset_path + "/" + file
+        run_meshes = run_meshes + meshes_from_path(this_path)
+
+    return walk_meshes, run_meshes
+
+def sample_from_meshes(meshes, n_points = 1_000):
+    output = []
+    for mesh in meshes:
+        output.append(sampled_verts_from_mesh(mesh, n_points = n_points))
+    return np.array(output)
