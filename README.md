@@ -5,7 +5,8 @@ File Structure:
 ```bash
 datasets/
 ├── action_smplx_models/
-│   └── Walk_B4_-_Stand_to_Walk_Back_stageii.npz
+|   ├── example_action_file1.npz
+│   └── example_action_file2.npz
 └── base_smplx_model/
     └── smplx/
         ├── md5sums.txt

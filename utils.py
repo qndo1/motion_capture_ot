@@ -104,16 +104,20 @@ def true_verts_from_path(amass_npz_path, return_faces = False):
     else:
         return verts
 
-def vertices_to_pointcloud(vertices, faces, n_points=1_000):
+def vertices_to_pointcloud(vertices, faces, n_points=1_000, return_mesh = False):
     mesh = trimesh.Trimesh(
         vertices=vertices,
         faces=faces,
         process=False
     )
     points, _ = trimesh.sample.sample_surface(mesh, n_points)
-    return points
+    
+    if return_mesh:
+        return points, mesh
+    else:
+        return points
 
-def sampled_verts_from_path(amass_npz_path, idx = None, n_points = 1_000):
+def sampled_verts_from_path(amass_npz_path, idx = None, n_points = 1_000, return_mesh = False):
     
     verts, faces = true_verts_from_path(amass_npz_path, return_faces = True)
     verts = verts.detach().numpy()
@@ -122,13 +126,7 @@ def sampled_verts_from_path(amass_npz_path, idx = None, n_points = 1_000):
         idx = np.random.randint(0, verts.shape[0])
         print(f"Randomly chosen index: {idx}")
 
-    mesh = trimesh.Trimesh(
-        vertices=verts[idx],
-        faces=faces,
-        process=False
-    )
-    points, _ = trimesh.sample.sample_surface(mesh, n_points)
-    return points
+    return vertices_to_pointcloud(verts[idx], faces, n_points = n_points, return_mesh = return_mesh)
 
 def choose_random_file(path = "datasets/action_smplx_models"):
     
@@ -139,15 +137,13 @@ def choose_random_file(path = "datasets/action_smplx_models"):
 
     return path + "/" + file
 
-def sampled_verts_from_random_action(n_points = 1_000):
+def sampled_verts_from_random_action(n_points = 1_000, return_mesh = False):
     file = choose_random_file()
 
-    return sampled_verts_from_path(file, n_points = n_points)
+    return sampled_verts_from_path(file, n_points = n_points, return_mesh = return_mesh)
 
 def plot_arr(arr):
     fig = go.Figure()
-
-    idx = np.random.randint(0, 1554)
 
     this_frame = arr
     x = this_frame[:,0]
@@ -159,7 +155,7 @@ def plot_arr(arr):
             x = x,
             y = y,
             z = z,
-            marker = dict(color = x + y + z, size = 2),
+            marker = dict(color = z, size = 2),
             mode = "markers"
         )
     )
@@ -180,3 +176,42 @@ def plot_random_pose(n_points = 1000):
     arr = sampled_verts_from_random_action(n_points = n_points)
 
     return plot_arr(arr)
+
+def remove_occluded_points(points, mesh, camera):
+    
+    # mesh: trimesh.Trimesh
+    # points: (N, 3) sampled points on the mesh
+    # camera: (3,) camera position
+
+    # Direction vectors from camera to points
+    dirs = points - camera
+    dists = np.linalg.norm(dirs, axis=1)
+    dirs = dirs / dists[:, None]
+
+    # Small epsilon to avoid self-intersection
+    epsilon = 1e-6
+    origins = np.repeat(camera[None, :], len(points), axis=0) + epsilon * dirs
+
+    # Ray-mesh intersection
+    locations, index_ray, index_tri = mesh.ray.intersects_location(
+        ray_origins=origins,
+        ray_directions=dirs,
+        multiple_hits=False
+    )
+
+    # Distance from camera to first hit
+    hit_dists = np.linalg.norm(locations - camera, axis=1)
+
+    # Initialize visibility mask
+    visible = np.zeros(len(points), dtype=bool)
+
+    # A point is visible if the first hit is at (approximately) the point
+    visible[index_ray] = np.isclose(
+        hit_dists,
+        dists[index_ray],
+        atol=1e-5
+    )
+
+    visible_points = points[visible]
+
+    return visible_points
