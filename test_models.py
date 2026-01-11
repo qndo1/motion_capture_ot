@@ -1,7 +1,3 @@
-"""
-Matching communication network with email network in the MC3 dataset
-"""
-
 import dev.util as util
 from dev.util import logger
 import matplotlib.pyplot as plt
