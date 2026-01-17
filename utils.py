@@ -4,6 +4,8 @@ import trimesh
 import torch
 import os
 import plotly.graph_objects as go
+import pandas as pd
+import json
 
 def smplx_vertices_from_amass(
     smplx_model_path,
@@ -310,6 +312,96 @@ def sample_from_meshes(meshes, n_points = 1_000, return_faces = False):
     if return_faces:
         return np.array(output_points), np.array(output_faces)
     return np.array(output_points)
+
+def construct_face_idx_to_region_json(force_override = False):
+    if "face_idx_to_region.json" in os.listdir():
+        if not force_override:
+            print("File already exists, set force_override = True to override it")
+            return False
+    # Calibration model in a T pose that makes it easy to define cutoffs
+    print("Loading mesh")
+    mesh = mesh_from_path("datasets/action_smplx_models/male2_Calibration_stageii.npz")
+    print("Mesh loaded")
+
+    face_centers = []
+    for i in range(mesh.faces.shape[0]):
+        this_face = mesh.faces[i]
+        these_verts = mesh.vertices[this_face]
+        face_centers.append(these_verts.mean(axis = 0))
+
+    face_centers = np.array(face_centers)
+
+    x = face_centers[:,0]
+    y = face_centers[:,1]
+    z = face_centers[:,2]
+
+    # Manually created region cutoffs (based on face centers)
+    mask_dict = {}
+    mask_dict["left_forearm"] = (x > -0.95) & (x < -0.7)
+    mask_dict["left_hand"] = (x <= -0.95)
+    mask_dict["right_forearm"] = (x < 2 * x.mean()-(-0.95)) & (x > 2 * x.mean()-(-0.7))
+    mask_dict["right_hand"] = (x >= 2 * x.mean()-(-0.95))
+    mask_dict["left_upper_arm"] = (x >= -0.7) & (x <= -0.5)
+    mask_dict["right_upper_arm"] = (x <= 2 * x.mean()-(-0.7)) & (x >= 2 * x.mean() - (-0.5))
+    mask_dict["head"] = (x >= -.5) & (x <= 2 * x.mean() - (-.5)) & ((z + y > 1.61)| (z > 1.53))
+    mask_dict["upper_torso"] = (x >= -.5) & (x <= 2 * x.mean() - (-.5)) & ((z + y <= 1.61) & (z <= 1.53)) & (z > 1.2)
+    mask_dict["lower_torso"] = (x >= -.5) & (x <= 2 * x.mean() - (-.5)) & (z <= 1.2) & ((z + y > 1.1) | (z > 1))
+    mask_dict["pelvis"] = ((z + y <= 1.1) & (z <= 1)) & (-np.abs(x - x.mean()) + z > .67)
+    mask_dict["left_thigh"] = (-np.abs(x - x.mean()) + z <= .67) & (z > .45) & (x <= x.mean())
+    mask_dict["right_thigh"] = (-np.abs(x - x.mean()) + z <= .67) & (z > .45) & (x > x.mean())
+    mask_dict["left_shin"] = (z <= .45) & (x <= x.mean()) & (z >= .08)
+    mask_dict["right_shin"] = (z <= .45) & (x > x.mean()) & (z >= .08)
+    mask_dict["left_foot"] = (x <= x.mean()) & (z < .08)
+    mask_dict["right_foot"] = (x > x.mean()) & (z < .08)
+
+
+    mask_df = pd.DataFrame(mask_dict)
+    face_idx_to_region = {}
+    for col in mask_df.columns:
+        this_reg = mask_df[mask_df[col]]
+        for idx in this_reg.index:
+            face_idx_to_region[idx] = col
+    
+    with open('face_idx_to_region.json', 'w') as fp:
+        json.dump(face_idx_to_region, fp)
+
+    return True
+
+def region_color_dict():
+    dic = { 'left_forearm': '#636EFA',
+            'left_hand': '#EF553B',
+            'right_forearm': '#00CC96',
+            'right_hand': '#AB63FA',
+            'left_upper_arm': '#FFA15A',
+            'right_upper_arm': '#19D3F3',
+            'head': '#FF6692',
+            'upper_torso': '#B6E880',
+            'lower_torso': '#FF97FF',
+            'pelvis': '#FECB52',
+            'left_thigh': '#1f77b4',
+            'right_thigh': '#ff7f0e',
+            'left_shin': '#2ca02c',
+            'right_shin': '#d62728',
+            'left_foot': '#9467bd',
+            'right_foot': '#8c564b' }
+    return dic
+
+def faces_to_regions(faces, return_colors = False):
+    if "face_idx_to_region.json" in os.listdir():
+        with open("face_idx_to_region.json", "r") as f:
+            face_idx_to_region = json.load(f) 
+        if return_colors:
+            regions = [face_idx_to_region[str(face)] for face in faces]
+            color_dict = region_color_dict()
+            colors = [color_dict[reg] for reg in regions]
+            return regions, colors
+        else:
+            return [face_idx_to_region[str(face)] for face in faces]
+    else:
+        construct_face_idx_to_region_json()
+        return faces_to_regions(faces, return_colors=return_colors)
+
+
 
 def plot_3d_points_and_connections(points1, points2, G, switch_yz = True, color_incorrect = False):
     """
