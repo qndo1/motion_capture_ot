@@ -104,18 +104,23 @@ def true_verts_from_path(amass_npz_path, return_faces = False):
     else:
         return verts
 
-def vertices_to_pointcloud(vertices, faces, n_points=1_000, return_mesh = False):
+def vertices_to_pointcloud(vertices, faces, n_points=1_000, return_mesh = False, return_faces = False):
     mesh = trimesh.Trimesh(
         vertices=vertices,
         faces=faces,
         process=False
     )
-    points, _ = trimesh.sample.sample_surface(mesh, n_points)
-    
+    points, face_indices = trimesh.sample.sample_surface(mesh, n_points)
+
+    output = [points]
     if return_mesh:
-        return points, mesh
-    else:
-        return points
+        output.append(mesh)
+    if return_faces:
+        output.append(face_indices)
+    
+    if len(output) == 1:
+        return output[0]
+    return tuple(output)
     
 def mesh_from_path(path, idx = 0):
     verts, faces = true_verts_from_path(path, return_faces = True)
@@ -146,11 +151,15 @@ def meshes_from_path(path):
     
     return meshes
 
-def sampled_verts_from_mesh(mesh, n_points = 1_000):
-    points, _ = trimesh.sample.sample_surface(mesh, n_points)
-    return points
+def sampled_verts_from_mesh(mesh, n_points = 1_000, return_faces = False):
+    points, face_indices = trimesh.sample.sample_surface(mesh, n_points)
+    
+    output = [points]
+    if return_faces:
+        output.append(face_indices)
+    return tuple(output)
 
-def sampled_verts_from_path(amass_npz_path, idx = None, n_points = 1_000, return_mesh = False):
+def sampled_verts_from_path(amass_npz_path, idx = None, n_points = 1_000, return_mesh = False, return_faces = False):
     
     verts, faces = true_verts_from_path(amass_npz_path, return_faces = True)
     verts = verts.detach().numpy()
@@ -159,7 +168,7 @@ def sampled_verts_from_path(amass_npz_path, idx = None, n_points = 1_000, return
         idx = np.random.randint(0, verts.shape[0])
         print(f"Randomly chosen index: {idx}")
 
-    return vertices_to_pointcloud(verts[idx], faces, n_points = n_points, return_mesh = return_mesh)
+    return vertices_to_pointcloud(verts[idx], faces, n_points = n_points, return_mesh = return_mesh, return_faces=return_faces)
 
 def choose_random_file(path = "datasets/action_smplx_models"):
     
@@ -170,12 +179,12 @@ def choose_random_file(path = "datasets/action_smplx_models"):
 
     return path + "/" + file
 
-def sampled_verts_from_random_action(n_points = 1_000, return_mesh = False):
+def sampled_verts_from_random_action(n_points = 1_000, return_mesh = False, return_faces = False):
     file = choose_random_file()
 
-    return sampled_verts_from_path(file, n_points = n_points, return_mesh = return_mesh)
+    return sampled_verts_from_path(file, n_points = n_points, return_mesh = return_mesh, return_faces=return_faces)
 
-def plot_arr(arr):
+def plot_arr(arr, color = None, colorbar = False, size = None):
     fig = go.Figure()
 
     this_frame = arr
@@ -183,31 +192,42 @@ def plot_arr(arr):
     y = this_frame[:,1]
     z = this_frame[:,2]
 
+    if color is None:
+        color = z
+
+    if size is None:
+        size = 2
+
     fig.add_trace(
         go.Scatter3d(
             x = x,
             y = y,
             z = z,
-            marker = dict(color = z, size = 2),
+            marker = dict(
+                color = color, 
+                size = size,
+                showscale = colorbar,
+                colorscale = "Plotly3"),
             mode = "markers"
         )
     )
 
     fig.update_layout(scene = dict(aspectmode = "data"))
     fig.update_layout(
-        width=300,
-        height=500,   # taller than wide works better for humans
+        width=600,
+        height=1000,   # taller than wide works better for humans
     )
     fig.update_layout(
         scene_camera=dict(
             eye=dict(x=2.5, y=2.5, z=2.5)
         )
     )
+
     return fig
 
 def plot_random_pose(n_points = 1000):
     arr = sampled_verts_from_random_action(n_points = n_points)
-
+    
     return plot_arr(arr)
 
 def remove_occluded_points(points, mesh, camera):
@@ -279,8 +299,99 @@ def get_walk_run_meshes(file_dict = None):
 
     return walk_meshes, run_meshes
 
-def sample_from_meshes(meshes, n_points = 1_000):
-    output = []
+def sample_from_meshes(meshes, n_points = 1_000, return_faces = False):
+    output_points = []
+    output_faces = []
     for mesh in meshes:
-        output.append(sampled_verts_from_mesh(mesh, n_points = n_points))
-    return np.array(output)
+        points, faces = sampled_verts_from_mesh(mesh, n_points = n_points, return_faces=True)
+        output_points.append(points)
+        output_faces.append(faces)
+    
+    if return_faces:
+        return np.array(output_points), np.array(output_faces)
+    return np.array(output_points)
+
+def plot_3d_points_and_connections(points1, points2, G, switch_yz = True, color_incorrect = False):
+    """
+    Given points1, points2, and G, plot the points and lines between matching points. If switch_xz is true then this will switch the x and z coordinates before plotting (since by default in the mocap data the x is the vertical axis).
+    points1, points2: Nx3 arrays
+    G: NxN array
+    switch_xz: Boolean
+    """
+    if points1.shape[0] != points2.shape[0]:
+        raise ValueError("Point clouds are not the same length")
+
+    if G.shape[0] != G.shape[1]:
+        raise ValueError("Matching matrix is not square")
+
+    if G.shape[0] != points1.shape[0]:
+        raise ValueError("Matching matrix dimensions don't match point cloud dimensions")
+
+    if np.count_nonzero(G) > points1.shape[0]:
+        raise ValueError("Matching has too many nonzero entries")
+
+    if np.count_nonzero(G) < points1.shape[0]:
+        raise ValueError("Matching has too few nonzero entries")
+
+    x_ind = 0
+    if switch_yz:
+        y_ind = 2
+        z_ind = 1
+    else:
+        y_ind = 1
+        z_ind = 2
+
+    # Ensure numpy arrays
+    points1 = np.asarray(points1)
+    points2 = np.asarray(points2)
+    G = np.asarray(G)
+
+    fig = go.Figure()
+
+    # Plot first set of 3D points
+    fig.add_trace(go.Scatter3d(
+        x=points1[:, x_ind], y=points1[:, y_ind], z=points1[:, z_ind],
+        mode='markers',
+        marker=dict(size=5, color='blue'),
+        name='Points 1'
+    ))
+
+    # Plot second set of 3D points
+    fig.add_trace(go.Scatter3d(
+        x=points2[:, x_ind], y=points2[:, y_ind], z=points2[:, z_ind],
+        mode='markers',
+        marker=dict(size=5, color='red'),
+        name='Points 2'
+    ))
+
+    # Draw connections for nonzero G[i, j]
+    for i in range(G.shape[0]):
+        for j in range(G.shape[1]):
+            if G[i, j] != 0:
+                c = "gray"
+                if color_incorrect and i != j:
+                    c = "red"
+                p1 = points1[i]
+                p2 = points2[j]
+                fig.add_trace(go.Scatter3d(
+                    x=[p1[x_ind], p2[x_ind]],
+                    y=[p1[y_ind], p2[y_ind]],
+                    z=[p1[z_ind], p2[z_ind]],
+                    mode='lines',
+                    line=dict(color=c, width=2),
+                    showlegend=False
+                ))
+
+    # Layout styling
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X',
+            yaxis_title='Y',
+            zaxis_title='Z',
+            aspectmode='data'
+        ),
+        title='3D Points with Connections',
+        template='plotly_white'
+    )
+
+    return fig
