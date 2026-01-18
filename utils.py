@@ -401,9 +401,22 @@ def faces_to_regions(faces, return_colors = False):
         construct_face_idx_to_region_json()
         return faces_to_regions(faces, return_colors=return_colors)
 
+def face_idx_pairs_to_region_pairs(idx_pairs):
+    start_regions = faces_to_regions(idx_pairs[:,0])
+    matched_regions = faces_to_regions(idx_pairs[:,1])
+    return zip(start_regions, matched_regions)
+
+def region_accuracy(G, faces1, faces2):
+    regions1 = faces_to_regions(faces1)
+    regions2 = faces_to_regions(((G / G.max()) @ faces2).astype(int))
+    correct = 0
+    for i in range(len(regions1)):
+        if regions1[i] == regions2[i]:
+            correct += 1
+    return correct / len(regions1)
 
 
-def plot_3d_points_and_connections(points1, points2, G, switch_yz = True, color_incorrect = False):
+def plot_3d_points_and_connections(points1, points2, G, switch_yz = False, color_incorrect = False, width = 600, height = 1000):
     """
     Given points1, points2, and G, plot the points and lines between matching points. If switch_xz is true then this will switch the x and z coordinates before plotting (since by default in the mocap data the x is the vertical axis).
     points1, points2: Nx3 arrays
@@ -483,7 +496,114 @@ def plot_3d_points_and_connections(points1, points2, G, switch_yz = True, color_
             aspectmode='data'
         ),
         title='3D Points with Connections',
-        template='plotly_white'
+        template='plotly_white',
+        width = width,
+        height = height
+    )
+    fig.update_layout(
+        scene_camera=dict(
+            eye=dict(x=2.5, y=2.5, z=2.5)
+        )
     )
 
+    return fig
+
+def plot_3d_points_and_connections_region_matched(points1, points2, faces1, faces2, G, switch_yz = False, plot_both = True, width = 600, height = 1000):
+    """
+    Given points1, points2, and G, plot the points and lines between matching points. If switch_xz is true then this will switch the x and z coordinates before plotting (since by default in the mocap data the x is the vertical axis).
+    points1, points2: Nx3 arrays
+    G: NxN array
+    switch_xz: Boolean
+    """
+    if points1.shape[0] != points2.shape[0]:
+        raise ValueError("Point clouds are not the same length")
+
+    if G.shape[0] != G.shape[1]:
+        raise ValueError("Matching matrix is not square")
+
+    if G.shape[0] != points1.shape[0]:
+        raise ValueError("Matching matrix dimensions don't match point cloud dimensions")
+
+    if np.count_nonzero(G) > points1.shape[0]:
+        raise ValueError("Matching has too many nonzero entries")
+
+    if np.count_nonzero(G) < points1.shape[0]:
+        raise ValueError("Matching has too few nonzero entries")
+
+    print("Region accuracy:", region_accuracy(G, faces1, faces2))
+
+    x_ind = 0
+    if switch_yz:
+        y_ind = 2
+        z_ind = 1
+    else:
+        y_ind = 1
+        z_ind = 2
+
+    # Ensure numpy arrays
+    points1 = np.asarray(points1)
+    points2 = np.asarray(points2)
+    G = np.asarray(G)
+
+    fig = go.Figure()
+
+    regions1 = faces_to_regions(faces1)
+    regions2 = faces_to_regions(((G / G.max()) @ faces2).astype(int))
+    color1 = ["red" if regions1[i] != regions2[i] else "green" for i in range(len(regions1))]
+
+    # Plot first set of 3D points
+    fig.add_trace(go.Scatter3d(
+        x=points1[:, x_ind], y=points1[:, y_ind], z=points1[:, z_ind],
+        mode='markers',
+        marker=dict(size=5, color=color1),
+        name='Points 1'
+    ))
+
+    regions1 = faces_to_regions(((G.T / G.max()) @ faces1).astype(int))
+    regions2 = faces_to_regions(faces2)
+    color2 = ["red" if regions1[i] != regions2[i] else "green" for i in range(len(regions1))]
+
+    if plot_both:
+        # Plot second set of 3D points
+        fig.add_trace(go.Scatter3d(
+            x=points2[:, x_ind], y=points2[:, y_ind], z=points2[:, z_ind],
+            mode='markers',
+            marker=dict(size=5, color= color2),
+            name='Points 2'
+        ))
+
+
+        # Draw connections for nonzero G[i, j]
+        for i in range(G.shape[0]):
+            for j in range(G.shape[1]):
+                if G[i, j] != 0:
+                    p1 = points1[i]
+                    p2 = points2[j]
+                    fig.add_trace(go.Scatter3d(
+                        x=[p1[x_ind], p2[x_ind]],
+                        y=[p1[y_ind], p2[y_ind]],
+                        z=[p1[z_ind], p2[z_ind]],
+                        mode='lines',
+                        line=dict(color="gray", width=2),
+                        showlegend=False
+                    ))
+
+    # Layout styling
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X',
+            yaxis_title='Y',
+            zaxis_title='Z',
+            aspectmode='data'
+        ),
+        title='3D Points with Connections',
+        template='plotly_white',
+        width = width,
+        height = height
+    )
+    fig.update_layout(
+        scene_camera=dict(
+            eye=dict(x=2.5, y=2.5, z=2.5)
+        )
+    )
     return fig
