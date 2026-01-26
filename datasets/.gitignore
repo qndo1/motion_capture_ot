@@ -1,3 +1,4 @@
 # ignore all files except .gitignore :
 *
 !.gitignore
+!0005_Jogging001.csv
