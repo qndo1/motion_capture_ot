@@ -121,7 +121,7 @@ def process_interaction_data(data_dict, track_accuracy=True, accuracy_interval=1
 
 
 # BAPG_numpy function with numerical stabilization and accuracy tracking
-def BAPG_numpy(A, B, a=None, b=None, X=None, epoch=2000, eps=1e-5, rho=1e-1,
+def BAPG_numpy(A, B, a=None, b=None, X=None, epoch=20000, eps=1e-5, rho=1e-1,
                track_accuracy=False, accuracy_interval=10, m=None, n=None):
     """
     BAPG algorithm with optional accuracy tracking.
