@@ -6,50 +6,58 @@ import os
 import plotly.graph_objects as go
 import pandas as pd
 import json
+from scipy.spatial import cKDTree
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components, dijkstra
 
 # Some constants I don't want to have to constantly redefine
 
 import numpy as np
 
 LABELS = [
-    "head",
-    "left_foot",
-    "left_forearm",
-    "left_hand",
-    "left_shin",
-    "left_thigh",
-    "left_upper_arm",
-    "lower_torso",
-    "pelvis",
-    "right_foot",
-    "right_forearm",
-    "right_hand",
-    "right_shin",
-    "right_thigh",
-    "right_upper_arm",
-    "upper_torso",
+    "head", # 0
+    "left_foot", # 1
+    "left_forearm", # 2
+    "left_hand", # 3
+    "left_shin", # 4
+    "left_thigh", # 5
+    "left_upper_arm", # 6
+    "lower_torso", # 7
+    "pelvis", # 8
+    "right_foot", # 9
+    "right_forearm", # 10
+    "right_hand", # 11
+    "right_shin", # 12
+    "right_thigh", # 13
+    "right_upper_arm", # 14
+    "upper_torso", # 15
 ]
 
 LABEL_TO_INDEX = {label: i for i, label in enumerate(LABELS)}
 
 D = np.array([
-    [0, 6, 4, 5, 6, 5, 3, 2, 3, 6, 4, 5, 6, 5, 3, 1],
-    [6, 0, 6, 7, 1, 2, 4, 3, 2, 4, 6, 7, 3, 2, 4, 4],
-    [4, 6, 0, 1, 6, 5, 1, 4, 5, 6, 4, 5, 6, 5, 3, 2],
-    [5, 7, 1, 0, 7, 6, 2, 5, 6, 7, 5, 6, 7, 6, 4, 3],
-    [6, 1, 6, 7, 0, 1, 5, 4, 3, 5, 7, 8, 4, 3, 5, 5],
-    [5, 2, 5, 6, 1, 0, 4, 3, 2, 4, 6, 7, 3, 2, 4, 4],
-    [3, 4, 1, 2, 5, 4, 0, 3, 4, 5, 3, 4, 5, 4, 2, 1],
-    [2, 3, 4, 5, 4, 3, 3, 0, 1, 3, 5, 6, 4, 3, 3, 1],
-    [3, 2, 5, 6, 3, 2, 4, 1, 0, 2, 6, 7, 3, 2, 4, 2],
-    [6, 4, 6, 7, 5, 4, 5, 3, 2, 0, 6, 7, 1, 2, 4, 4],
-    [4, 6, 4, 5, 7, 6, 3, 5, 6, 6, 0, 1, 6, 5, 1, 2],
-    [5, 7, 5, 6, 8, 7, 4, 6, 7, 7, 1, 0, 7, 6, 2, 3],
-    [6, 3, 6, 7, 4, 3, 5, 4, 3, 1, 6, 7, 0, 1, 5, 5],
-    [5, 2, 5, 6, 3, 2, 4, 3, 2, 2, 5, 6, 1, 0, 4, 4],
-    [3, 4, 3, 4, 5, 4, 2, 3, 4, 4, 1, 2, 5, 4, 0, 1],
-    [1, 4, 2, 3, 5, 4, 1, 1, 2, 4, 2, 3, 5, 4, 1, 0],
+    [0, 6, 3, 4, 5, 4, 2, 2, 3, 6, 3, 4, 5, 4, 2, 1], # head
+    [6, 0, 7, 8, 1, 2, 6, 4, 3, 6, 7, 8, 5, 4, 6, 5], # left foot
+    [3, 7, 0, 1, 6, 5, 1, 3, 4, 7, 4, 5, 6, 5, 3, 2], # left forearm
+    [4, 8, 1, 0, 7, 6, 2, 4, 5, 8, 5, 6, 7, 6, 4, 3], # left hand
+    [5, 1, 6, 7, 0, 1, 5, 3, 2, 5, 6, 7, 4, 3, 5, 4], # left shin
+    [4, 2, 5, 6, 1, 0, 4, 2, 1, 4, 5, 6, 3, 2, 4, 3], # left thigh
+    [2, 6, 1, 2, 5, 4, 0, 2, 3, 6, 3, 4, 5, 4, 2, 1], # left upper arm
+    [2, 4, 3, 4, 3, 2, 2, 0, 1, 4, 3, 4, 3, 2, 2, 1], # lower torso
+    [3, 3, 4, 5, 2, 1, 3, 1, 0, 3, 4, 5, 2, 1, 3, 2], # pelvis
+    [6, 6, 7, 8, 5, 4, 6, 4, 3, 0, 7, 8, 1, 2, 6, 5], # right foot
+    [3, 7, 4, 5, 6, 5, 3, 3, 4, 7, 0, 1, 6, 5, 1, 2], # right forearm
+    [4, 8, 5, 6, 7, 6, 4, 4, 5, 8, 1, 0, 7, 6, 2, 3], # right hand
+    [5, 5, 6, 7, 4, 3, 5, 3, 2, 1, 6, 7, 0, 1, 5, 4], # right shin
+    [4, 4, 5, 6, 3, 2, 4, 2, 1, 2, 5, 6, 1, 0, 4, 3], # right thigh
+    [2, 6, 3, 4, 5, 4, 2, 2, 3, 6, 1, 2, 5, 4, 0, 1], # right upper arm
+    [1, 5, 2, 3, 4, 3, 1, 1, 2, 5, 2, 3, 4, 3, 1, 0], # upper torso
 ], dtype=np.int8)
+
+def body_region_string_distance(region1, region2):
+    idx1 = LABEL_TO_INDEX[region1]
+    idx2 = LABEL_TO_INDEX[region2]
+    print(f"{region1} to {region2}: {D[idx1, idx2]}")
 
 
 def smplx_vertices_from_amass(
@@ -495,7 +503,110 @@ def average_region_distance(G, faces1, faces2):
 
     return D[idx1, idx2].mean()
 
+def pca_symmetry_plane(points, zero_z_coord = True):
+    centered = points - points.mean(axis=0)
+    C = np.cov(centered.T)
+    eigvals, eigvecs = np.linalg.eigh(C)
+    normal = eigvecs[:, np.argmin(eigvals)]
+    out = normal / np.linalg.norm(normal)
+    if not zero_z_coord:
+        return out
+    if zero_z_coord:
+        return np.array([out[0], out[1], 0])
+    
+def lift_with_symmetry(points, normal, beta=1.0):
+    if (((points - points.mean(axis = 0)) @ normal)[points[:,2] > np.percentile(points[:,2], 90)] > 0).mean() < 0.5:
+        normal = - normal
+    sideways_normal = np.cross(normal, np.array([0,0,1]))
+    sideways_normal = sideways_normal / np.linalg.norm(sideways_normal)
+    signed_dist = (points - points.mean(axis = 0)) @ sideways_normal
+    return np.hstack([points, beta * signed_dist[:, None]])
 
+def graph_distance_within_cloud_minimally_connected(P, k=3):
+    """
+    Construct a minimally connected kNN graph on two point clouds
+    and compute graph distances.
+
+    Parameters
+    ----------
+    P, Q : (N, 3) numpy arrays
+        Two point clouds of equal size
+    k : int
+        Number of nearest neighbors (default: 3)
+
+    Returns
+    -------
+    D : (N, N) numpy array
+        Graph distance matrix from P to Q
+    """
+    P = np.asarray(P)
+
+    N = P.shape[0]
+    X = P         # (2N, 3)
+    M = N
+
+    # --- Step 1: initial kNN graph ---
+    tree = cKDTree(X)
+    dists, nbrs = tree.query(X, k=k + 1)
+
+    edges = {}  # (i, j) -> weight
+    for i in range(M):
+        for j, dist in zip(nbrs[i][1:], dists[i][1:]):
+            a, b = sorted((i, j))
+            edges[(a, b)] = dist
+
+    # --- Step 2: minimally connect components ---
+    while True:
+        rows, cols, weights = [], [], []
+        for (i, j), w in edges.items():
+            rows += [i, j]
+            cols += [j, i]
+            weights += [w, w]
+
+        A = coo_matrix((weights, (rows, cols)), shape=(M, M))
+        n_components, labels = connected_components(A, directed=False)
+
+        if n_components == 1:
+            break
+
+        # pick one component
+        c0 = labels[0]
+        idx_c0 = np.where(labels == c0)[0]
+        idx_rest = np.where(labels != c0)[0]
+
+        # find closest inter-component pair
+        P0 = X[idx_c0]
+        P1 = X[idx_rest]
+
+        dmat = np.linalg.norm(P0[:, None, :] - P1[None, :, :], axis=2)
+        i_min, j_min = np.unravel_index(np.argmin(dmat), dmat.shape)
+
+        u = idx_c0[i_min]
+        v = idx_rest[j_min]
+        w = dmat[i_min, j_min]
+
+        a, b = sorted((u, v))
+        edges[(a, b)] = w
+
+    # --- Step 3: shortest-path distances ---
+    rows, cols, weights = [], [], []
+    for (i, j), w in edges.items():
+        rows += [i, j]
+        cols += [j, i]
+        weights += [w, w]
+
+    A = coo_matrix((weights, (rows, cols)), shape=(M, M))
+
+    # distances from P nodes (0..N-1) to all nodes
+    dist_full = dijkstra(A, directed=False, indices=np.arange(N))
+
+    # extract P -> P distances
+    D = dist_full
+
+    return D
+
+
+# PLOTTING STUFF BELOW
 
 def plot_3d_points_and_connections(points1, points2, G, switch_yz = False, color_incorrect = False, width = 600, height = 1000):
     """
@@ -611,7 +722,7 @@ def plot_3d_points_and_connections_region_matched(points1, points2, faces1, face
     if np.count_nonzero(G) < points1.shape[0]:
         raise ValueError("Matching has too few nonzero entries")
 
-    print("Region accuracy:", region_accuracy(G, faces1, faces2))
+    print("Region accuracy adjusted:", region_accuracy_adjusted(G, faces1, faces2))
 
     x_ind = 0
     if switch_yz:
@@ -640,11 +751,12 @@ def plot_3d_points_and_connections_region_matched(points1, points2, faces1, face
         name='Points 1'
     ))
 
-    regions1 = faces_to_regions(((G.T / G.max()) @ faces1).astype(int))
-    regions2 = faces_to_regions(faces2)
-    color2 = ["red" if regions1[i] != regions2[i] else "green" for i in range(len(regions1))]
-
     if plot_both:
+        regions1 = faces_to_regions(((G.T / G.max()) @ faces1).astype(int))
+        regions2 = faces_to_regions(faces2)
+        color2 = ["red" if regions1[i] != regions2[i] else "green" for i in range(len(regions1))]
+
+    
         # Plot second set of 3D points
         fig.add_trace(go.Scatter3d(
             x=points2[:, x_ind], y=points2[:, y_ind], z=points2[:, z_ind],
@@ -688,3 +800,140 @@ def plot_3d_points_and_connections_region_matched(points1, points2, faces1, face
         )
     )
     return fig
+
+def plot_median_skeleton(points, faces, width = 600, height = 1000, connect_dist = 1):
+    regions = faces_to_regions(faces)
+    df = pd.DataFrame({
+        "x": points[:,0],
+        "y": points[:,1],
+        "z": points[:,2],
+        "regions": regions
+    })
+
+    grouped = df.groupby("regions").median()
+    median_points = grouped.to_numpy()
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter3d(
+        x=median_points[:, 0], y=median_points[:, 1], z=median_points[:, 2],
+        mode='markers',
+        marker=dict(size=10)
+    ))
+
+    for i in range(len(LABELS)):
+        adjacents = [j for j in range(len(LABELS)) if D[i,j] == connect_dist]
+        for adj in adjacents:
+            fig.add_trace(go.Scatter3d(
+                x=[median_points[i, 0], median_points[adj, 0]],
+                y=[median_points[i, 1], median_points[adj, 1]],
+                z=[median_points[i, 2], median_points[adj, 2]],
+                mode='lines',
+                line=dict(color="gray", width=2),
+                showlegend=False
+            ))
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X',
+            yaxis_title='Y',
+            zaxis_title='Z',
+            aspectmode='data'
+        ),
+        title='Median Skeleton',
+        template='plotly_white',
+        width = width,
+        height = height
+    )
+    fig.update_layout(
+        scene_camera=dict(
+            eye=dict(x=2.5, y=2.5, z=2.5)
+        )
+    )
+    return fig
+
+def plot_median_skeleton_from_match(G, points1, points2, faces1, faces2, plot_ground_truth = False, width = 600, height = 1000):
+    ordered_points = ((G / G.max()) @ points2)
+    if not plot_ground_truth:
+        return plot_median_skeleton(ordered_points, faces1, width = width, height = height)
+    
+    regions = faces_to_regions(faces2)
+    df = pd.DataFrame({
+        "x": points2[:,0],
+        "y": points2[:,1],
+        "z": points2[:,2],
+        "regions": regions
+    })
+
+    grouped = df.groupby("regions").median()
+    median_points = grouped.to_numpy()
+    
+    fig = go.Figure()
+
+    # GROUND TRUTH POINTS AND LINES
+    fig.add_trace(go.Scatter3d(
+        x=median_points[:, 0], y=median_points[:, 1], z=median_points[:, 2],
+        mode='markers',
+        marker=dict(size=10, color="blue")
+    ))
+
+    for i in range(len(LABELS)):
+        adjacents = [j for j in range(len(LABELS)) if D[i,j] == 1]
+        for adj in adjacents:
+            fig.add_trace(go.Scatter3d(
+                x=[median_points[i, 0], median_points[adj, 0]],
+                y=[median_points[i, 1], median_points[adj, 1]],
+                z=[median_points[i, 2], median_points[adj, 2]],
+                mode='lines',
+                line=dict(color="blue", width=2),
+                showlegend=False
+            ))
+
+    # MATCHED POINTS AND LINES
+    regions = faces_to_regions(faces1)
+    df = pd.DataFrame({
+        "x": ordered_points[:,0],
+        "y": ordered_points[:,1],
+        "z": ordered_points[:,2],
+        "regions": regions
+    })
+
+    grouped = df.groupby("regions").median()
+    median_points = grouped.to_numpy()
+    fig.add_trace(go.Scatter3d(
+        x=median_points[:, 0], y=median_points[:, 1], z=median_points[:, 2],
+        mode='markers',
+        marker=dict(size=10, color="red")
+    ))
+
+    for i in range(len(LABELS)):
+        adjacents = [j for j in range(len(LABELS)) if D[i,j] == 1]
+        for adj in adjacents:
+            fig.add_trace(go.Scatter3d(
+                x=[median_points[i, 0], median_points[adj, 0]],
+                y=[median_points[i, 1], median_points[adj, 1]],
+                z=[median_points[i, 2], median_points[adj, 2]],
+                mode='lines',
+                line=dict(color="red", width=2),
+                showlegend=False
+            ))
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X',
+            yaxis_title='Y',
+            zaxis_title='Z',
+            aspectmode='data'
+        ),
+        title='Median Skeleton',
+        template='plotly_white',
+        width = width,
+        height = height
+    )
+    fig.update_layout(
+        scene_camera=dict(
+            eye=dict(x=2.5, y=2.5, z=2.5)
+        )
+    )
+    return fig
+
