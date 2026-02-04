@@ -9,6 +9,7 @@ import json
 from scipy.spatial import cKDTree
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components, dijkstra
+import scipy
 
 # Some constants I don't want to have to constantly redefine
 
@@ -512,7 +513,8 @@ def pca_symmetry_plane(points, zero_z_coord = True):
     if not zero_z_coord:
         return out
     if zero_z_coord:
-        return np.array([out[0], out[1], 0])
+        zeroed = np.array([out[0], out[1], 0])
+        return zeroed / np.linalg.norm(zeroed)
     
 def lift_with_symmetry(points, normal, beta=1.0):
     if (((points - points.mean(axis = 0)) @ normal)[points[:,2] > np.percentile(points[:,2], 90)] > 0).mean() < 0.5:
@@ -604,6 +606,27 @@ def graph_distance_within_cloud_minimally_connected(P, k=3):
     D = dist_full
 
     return D
+
+def left_right_augmentation(points, direction, beta = 1):
+    mask = (points[:,2] < np.percentile(points[:,2], 10))
+    feet_only_projected = points[mask][:,:-1]
+    means = scipy.cluster.vq.kmeans(feet_only_projected, 2)[0]
+    middle_dists = (means - points[:,:-1].mean(axis = 0)) @ (np.cross(np.append(direction[:-1], 0), np.array([0,0,1])))[:-1]
+
+    l_ind = np.argmin(middle_dists)
+    r_ind = np.argmax(middle_dists)
+
+    feet_l_ind = np.argmin(np.linalg.norm(feet_only_projected - means[l_ind], axis = 1))
+    lai = np.argmin(np.linalg.norm(points[:, :-1] - feet_only_projected[feet_l_ind], axis = 1))
+
+    feet_r_ind = np.argmin(np.linalg.norm(feet_only_projected - means[r_ind], axis = 1))
+    rai = np.argmin(np.linalg.norm(points[:, :-1] - feet_only_projected[feet_r_ind], axis = 1))
+
+    C = graph_distance_within_cloud_minimally_connected(points)
+
+    distance_differences = C[rai, :] - C[lai, :]
+
+    return np.append(points, beta * distance_differences.reshape(-1, 1), axis = 1)
 
 
 # PLOTTING STUFF BELOW
