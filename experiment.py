@@ -462,7 +462,7 @@ def fused_gromov_experiment_by_alpha(num_poses= 10, timedeltas= np.arange(0, 121
 
 def left_right_augmentation(num_poses=10, timedeltas=np.arange(0, 121, 10), n_points = 1000):
     if not (0 in timedeltas):
-        timedeltas = np.append(0, np.arange(0, 81, 1))
+        timedeltas = np.append(0, timedeltas)
     fig, ax = plt.subplots(ncols=2, figsize = (20, 10))
 
     datasets_path = "datasets/action_smplx_models/"
@@ -548,7 +548,191 @@ def left_right_augmentation(num_poses=10, timedeltas=np.arange(0, 121, 10), n_po
 
     return ax
 
+def left_right_augmentation_relative(num_poses=10, timedeltas=np.arange(0, 121, 10), n_points = 1000):
+    if not (0 in timedeltas):
+        timedeltas = np.append(0, timedeltas)
+    fig, ax = plt.subplots(ncols=2, nrows = 2, figsize = (20, 10))
+
+    datasets_path = "datasets/action_smplx_models/"
+    poses = [p for p in os.listdir(datasets_path) if p != "male2_Calibration_stagegii.npz"]
+    pose_paths = np.random.choice(poses, size = num_poses, replace = True)
+    random_indices = []
+    for i in range(num_poses):
+        num_frames = int(np.load(datasets_path + pose_paths[i])["mocap_time_length"] * 120)
+        rand_idx = np.random.randint(0, num_frames - timedeltas[-1] - 1)
+        random_indices.append(rand_idx)
+
+    print("indices chosen")
+
+    points_dict = {}
+    faces_dict = {}
+    for i in range(num_poses):
+        for td in timedeltas:
+            points, faces =  utils.sampled_verts_from_path(datasets_path + pose_paths[i], idx = random_indices[i] + td, n_points = n_points, return_faces=True)
+            points_dict[(i, td)] = points
+            faces_dict[(i, td)] = faces
     
+    print("points sampled")
+
+    reg_acc_diffs = []
+    reg_dist_diffs = []
+
+    baseline_reg_accs = []
+    augmented_reg_accs = []
+
+    individual_acc_diffs = []
+    diff_norms = []
+
+    a = np.ones(n_points) / n_points
+    b = np.ones(n_points) / n_points
+
+    for td in timedeltas[1:]:
+        these_reg_acc_diffs = []
+        these_reg_dist_diffs = []
+
+        for i in range(num_poses):
+            points1 = points_dict[(i, 0)]
+            faces1 = faces_dict[(i, 0)]
+            
+            points2 = points_dict[(i, td)]
+            faces2 = faces_dict[(i, td)]
+
+            diff = points2.mean(axis = 0) - points1.mean(axis = 0)
+            diff_norms.append(np.linalg.norm(diff))
+
+            aug1 = utils.left_right_augmentation(points1, diff)
+            aug2 = utils.left_right_augmentation(points2, diff)
+
+            M_baseline = ot.dist(points1, points2)
+            M_aug = ot.dist(aug1, aug2)
+
+            G_baseline = ot.solve(M_baseline, a, b).plan
+            G_aug = ot.solve(M_aug, a, b).plan
+
+            baseline_reg_acc = utils.region_accuracy_adjusted(G_baseline, faces1, faces2)
+            baseline_reg_accs.append(baseline_reg_acc)
+
+            aug_reg_acc = utils.region_accuracy_adjusted(G_aug, faces1, faces2)
+            augmented_reg_accs.append(aug_reg_acc)
+            these_reg_acc_diffs.append(aug_reg_acc - baseline_reg_acc)
+            individual_acc_diffs.append(aug_reg_acc - baseline_reg_acc)
+            
+            baseline_dist = utils.average_region_distance(G_baseline, faces1, faces2)
+            aug_dist = utils.average_region_distance(G_aug, faces1, faces2)
+
+            these_reg_dist_diffs.append(baseline_dist - aug_dist)
+
+        reg_acc_diffs.append(np.mean(these_reg_acc_diffs))
+        reg_dist_diffs.append(np.mean(these_reg_dist_diffs))
+        print("td", td, "done")
+
+    ax[0, 0].plot(timedeltas[1:], reg_acc_diffs, label = "Augmented Accuracy - Baseline Accuracy")
+    ax[0, 0].set_xlabel("Frame delta")
+    ax[0, 0].set_ylabel("Difference in Adjusted Region Accuracy")
+    ax[0, 0].set_title("Accuracy by Frame Delta\nBaseline vs Augmented")
+    ax[0, 0].axhline(0, linestyle = "dotted", label = "No difference")
+    ax[0, 0].legend()
+
+    ax[0, 1].plot(timedeltas[1:], reg_dist_diffs, label = "Baseline Average Distance - Augmented Average Distance")
+    ax[0, 1].set_xlabel("Frame delta")
+    ax[0, 1].set_ylabel("Difference Average Region Distance")
+    ax[0, 1].set_title("Average Region Distance by Frame Delta\nBaseline vs Augmented")
+    ax[0, 1].axhline(0, linestyle = "dotted", label = "No difference")
+    ax[0, 1].legend()
+
+    ax[1, 0].scatter(baseline_reg_accs, augmented_reg_accs)
+    ax[1, 0].set_xlabel("Baseline Accuracy")
+    ax[1, 0].set_ylabel("Augmented Accuracy")
+    ax[1, 0].axline((0,0), (1,1), linestyle = "dotted", color = "gray", label = "Equal performance")
+    ax[1, 0].legend()
+
+    ax[1, 1].scatter(diff_norms, individual_acc_diffs)
+    ax[1, 1].set_xlabel("Distance to next point cloud")
+    ax[1, 1].set_ylabel("Augmented Accuracy - Baseline Accuracy")
+    ax[1, 1].axhline(0, linestyle = "dotted", color = "gray", label = "Equal performance")
+    ax[1, 1].legend()
+
+    return ax
+
+def left_right_augmented_fgw(num_poses = 10, timedeltas = np.arange(0, 121, 10), n_points = 1000, alphas = np.arange(0, 1.01, 0.1)):
+    if not (0 in timedeltas):
+        timedeltas = np.append(0, timedeltas)
+    fig, ax = plt.subplots(ncols=2, figsize = (20, 10))
+
+    datasets_path = "datasets/action_smplx_models/"
+    poses = [p for p in os.listdir(datasets_path) if p != "male2_Calibration_stagegii.npz"]
+    pose_paths = np.random.choice(poses, size = num_poses, replace = True)
+    random_indices = []
+    for i in range(num_poses):
+        num_frames = int(np.load(datasets_path + pose_paths[i])["mocap_time_length"] * 120)
+        rand_idx = np.random.randint(0, num_frames - timedeltas[-1] - 1)
+        random_indices.append(rand_idx)
+
+    print("indices chosen")
+
+    points_dict = {}
+    faces_dict = {}
+    for i in range(num_poses):
+        for td in timedeltas:
+            points, faces =  utils.sampled_verts_from_path(datasets_path + pose_paths[i], idx = random_indices[i] + td, n_points = n_points, return_faces=True)
+            points_dict[(i, td)] = points
+            faces_dict[(i, td)] = faces
+    
+    print("points sampled")
+
+    accs_matrix = np.zeros((len(alphas), len(timedeltas) - 1))
+    dists_matrix = np.zeros((len(alphas), len(timedeltas) - 1))
+
+    for i in range(len(alphas)):
+        for k in range(len(timedeltas) - 1):
+            td = timedeltas[k + 1]
+            these_accs = []
+            these_dists = []
+            for j in range(num_poses):
+                points1 = points_dict[(j, 0)]
+                points2 = points_dict[(j, td)]
+
+                faces1 = faces_dict[(j, 0)]
+                faces2 = faces_dict[(j, td)]
+
+                means_diff = points2.mean(axis = 0) - points1.mean(axis = 0)
+
+                augmented1 = utils.left_right_augmentation(points1, means_diff)
+                augmented2 = utils.left_right_augmentation(points2, means_diff)
+
+                C1 = utils.graph_distance_within_cloud_minimally_connected(points1)
+                C2 = utils.graph_distance_within_cloud_minimally_connected(points2)
+
+                M = ot.dist(augmented1, augmented2)
+
+                a = np.ones(n_points) / n_points
+                b = np.ones(n_points) / n_points
+                G = ot.fused_gromov_wasserstein(M, C1, C2, a, b, alpha = alphas[i])
+
+                these_accs.append(utils.region_accuracy_adjusted(G, faces1, faces2))
+                these_dists.append(utils.average_region_distance(G, faces1, faces2))
+
+            accs_matrix[i, k] = np.mean(these_accs)
+            dists_matrix[i, k] = np.mean(these_dists)
+            print(alphas[i], timedeltas[k],"done")
+        
+        ax[0].plot(timedeltas[1:], accs_matrix[i], label = alphas[i])
+        ax[0].set_xlabel("Time Delta")
+        ax[0].set_ylabel("Adjusted Region Accuracy")
+        ax[0].set_title("Accuracy by Time Delta")
+        ax[0].legend()
+
+        ax[1].plot(timedeltas[1:], dists_matrix[i], label = alphas[i])
+        ax[1].set_xlabel("Time Delta")
+        ax[1].set_ylabel("Average Distance")
+        ax[1].set_title("Distance by Time Delta")
+        ax[1].legend()
+
+    
+            
+                
+
+
 
 
 if __name__ == "__main__":
@@ -559,5 +743,5 @@ if __name__ == "__main__":
     # ax = novel_component_comparison(num_poses= 10, timedeltas= np.arange(0, 121, 5))
     # plt.show()
     #ax = fused_gromov_experiment_by_alpha(num_poses=10, timedeltas=np.arange(0, 121, 10))
-    ax = left_right_augmentation(num_poses= 10, timedeltas = np.arange(0, 121, 10))
+    ax = left_right_augmented_fgw(num_poses= 10, timedeltas = np.arange(0, 121, 10))
     plt.show()
