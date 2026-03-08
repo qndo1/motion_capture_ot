@@ -10,6 +10,7 @@ from scipy.spatial import cKDTree
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components, dijkstra
 import scipy
+import ot
 
 # Some constants I don't want to have to constantly redefine
 
@@ -146,12 +147,94 @@ def smplx_vertices_from_amass(
 
     return verts, faces
 
-def true_verts_from_path(amass_npz_path, return_faces = False):
+def smplx_vertices_from_amass_single_frame(
+    smplx_model_path,
+    amass_npz_path,
+    frame_idx,
+    gender="neutral",
+    device="cpu",
+):
+    """
+    Returns:
+        verts: (V, 3) tensor of vertex positions for one frame
+        faces: (F, 3) numpy array of face indices
+    """
+    device = torch.device(device)
+
+    # -------------------------
+    # Load AMASS motion data
+    # -------------------------
+    
+    data = np.load(amass_npz_path)
+
+    poses = data["poses"]          # (T, 165)
+    betas = data["betas"]          # (10,) or (16,)
+    trans = data.get("trans", None)
+
+    T = poses.shape[0]
+    assert 0 <= frame_idx < T, f"frame_idx must be in [0, {T-1}]"
+
+    # -------------------------
+    # Extract one frame
+    # -------------------------
+    poses = torch.tensor(poses[frame_idx:frame_idx+1], dtype=torch.float32, device=device)
+
+    global_orient = poses[:, :3]
+    body_pose = poses[:, 3:66]
+    jaw_pose = poses[:, 66:69]
+    leye_pose = poses[:, 69:72]
+    reye_pose = poses[:, 72:75]
+    left_hand_pose = poses[:, 75:120]
+    right_hand_pose = poses[:, 120:165]
+
+    betas = torch.tensor(betas[:10], dtype=torch.float32, device=device).unsqueeze(0)
+
+    if trans is not None:
+        transl = torch.tensor(trans[frame_idx:frame_idx+1], dtype=torch.float32, device=device)
+    else:
+        transl = torch.zeros((1, 3), device=device)
+
+    # -------------------------
+    # Load SMPL-X model (batch_size = 1)
+    # -------------------------
+    
+    model = smplx.create(
+        model_path=smplx_model_path,
+        model_type="smplx",
+        gender=gender,
+        ext="npz",
+        use_pca=False,
+        batch_size=1,
+    ).to(device)
+
+    # -------------------------
+    # Forward pass
+    # -------------------------
+    with torch.no_grad():
+        output = model(
+            betas=betas,
+            global_orient=global_orient,
+            body_pose=body_pose,
+            jaw_pose=jaw_pose,
+            leye_pose=leye_pose,
+            reye_pose=reye_pose,
+            left_hand_pose=left_hand_pose,
+            right_hand_pose=right_hand_pose,
+            transl=transl,
+        )
+
+    verts = output.vertices[0]  # (V, 3)
+    faces = model.faces        # (F, 3)
+
+    return verts, faces
+
+def true_verts_from_path(amass_npz_path, return_faces = False, frame_idx = 0):
     smplx_model_path = "datasets/base_smplx_model"
 
-    verts, faces = smplx_vertices_from_amass(
+    verts, faces = smplx_vertices_from_amass_single_frame(
         smplx_model_path,
         amass_npz_path,
+        frame_idx,
         gender="neutral",
     )
 
@@ -215,15 +298,17 @@ def sampled_verts_from_mesh(mesh, n_points = 1_000, return_faces = False):
     return points
 
 def sampled_verts_from_path(amass_npz_path, idx = None, n_points = 1_000, return_mesh = False, return_faces = False):
-    
-    verts, faces = true_verts_from_path(amass_npz_path, return_faces = True)
+    if idx is None:
+        idx = 0
+
+    verts, faces = true_verts_from_path(amass_npz_path, return_faces = True, frame_idx=idx)
     verts = verts.detach().numpy()
 
-    if idx is None or idx >= verts.shape[0]:
-        idx = np.random.randint(0, verts.shape[0])
-        print(f"Randomly chosen index: {idx}")
+    # if idx is None or idx >= verts.shape[0]:
+    #     idx = np.random.randint(0, verts.shape[0])
+    #     print(f"Randomly chosen index: {idx}")
 
-    return vertices_to_pointcloud(verts[idx], faces, n_points = n_points, return_mesh = return_mesh, return_faces=return_faces)
+    return vertices_to_pointcloud(verts, faces, n_points = n_points, return_mesh = return_mesh, return_faces=return_faces)
 
 def choose_random_file(path = "datasets/action_smplx_models"):
     
@@ -645,10 +730,26 @@ def left_right_augmentation(points, direction, beta = 1, return_anchor_indices =
     else:
         return np.append(points, beta * distance_differences.reshape(-1, 1), axis = 1), (lai, rai)
 
+def main_matching(points1, points2):
+    direction = points2.mean(axis = 0) - points1.mean(axis = 0)
+    points1 = left_right_augmentation(points1, direction)
+    points2 = left_right_augmentation(points2, direction)
+
+    N = points1.shape[0]
+
+    a = np.ones(N) / N
+    b = np.ones(N) / N
+
+    M = ot.dist(points1, points2)
+
+    G = ot.solve(M, a, b).plan
+
+    return G
+
 
 # PLOTTING STUFF BELOW
 
-def plot_3d_points_and_connections(points1, points2, G, switch_yz = False, color_incorrect = False, width = 600, height = 1000):
+def plot_3d_points_and_connections(points1, points2, G, switch_yz = False, color_incorrect = False, width = 600, height = 1000, cam = dict(x=0, y=2.5, z=1)):
     """
     Given points1, points2, and G, plot the points and lines between matching points. If switch_xz is true then this will switch the x and z coordinates before plotting (since by default in the mocap data the x is the vertical axis).
     points1, points2: Nx3 arrays
@@ -734,13 +835,13 @@ def plot_3d_points_and_connections(points1, points2, G, switch_yz = False, color
     )
     fig.update_layout(
         scene_camera=dict(
-            eye=dict(x=2.5, y=2.5, z=2.5)
+            eye=cam
         )
     )
 
     return fig
 
-def plot_3d_points_and_connections_region_matched(points1, points2, faces1, faces2, G, switch_yz = False, plot_both = True, width = 600, height = 1000):
+def plot_3d_points_and_connections_region_matched(points1, points2, faces1, faces2, G, switch_yz = False, plot_both = True, width = 600, height = 1000, cam = dict(x=0, y=2.5, z=1)):
     """
     Given points1, points2, and G, plot the points and lines between matching points. If switch_xz is true then this will switch the x and z coordinates before plotting (since by default in the mocap data the x is the vertical axis).
     points1, points2: Nx3 arrays
@@ -837,12 +938,12 @@ def plot_3d_points_and_connections_region_matched(points1, points2, faces1, face
     )
     fig.update_layout(
         scene_camera=dict(
-            eye=dict(x=2.5, y=2.5, z=2.5)
+            eye=cam
         )
     )
     return fig
 
-def plot_median_skeleton(points, faces, width = 600, height = 1000, connect_dist = 1):
+def plot_median_skeleton(points, faces, width = 600, height = 1000, connect_dist = 1, cam = dict(x=0, y=2.5, z=1)):
     regions = faces_to_regions(faces)
     df = pd.DataFrame({
         "x": points[:,0],
@@ -888,12 +989,12 @@ def plot_median_skeleton(points, faces, width = 600, height = 1000, connect_dist
     )
     fig.update_layout(
         scene_camera=dict(
-            eye=dict(x=2.5, y=2.5, z=2.5)
+            eye=cam
         )
     )
     return fig
 
-def plot_median_skeleton_from_match(G, points1, points2, faces1, faces2, plot_ground_truth = False, width = 600, height = 1000):
+def plot_median_skeleton_from_match(G, points1, points2, faces1, faces2, plot_ground_truth = False, width = 600, height = 1000, cam = dict(x=0, y=2.5, z=1)):
     ordered_points = ((G / G.max()) @ points2)
     if not plot_ground_truth:
         return plot_median_skeleton(ordered_points, faces1, width = width, height = height)
@@ -973,12 +1074,12 @@ def plot_median_skeleton_from_match(G, points1, points2, faces1, faces2, plot_gr
     )
     fig.update_layout(
         scene_camera=dict(
-            eye=dict(x=2.5, y=2.5, z=2.5)
+            eye=cam
         )
     )
     return fig
 
-def plot_specific_region_connections(points1, points2, faces1, faces2, G, region_label, width = 600, height = 1000):
+def plot_specific_region_connections(points1, points2, faces1, faces2, G, region_label, width = 600, height = 1000, cam = dict(x=0, y=2.5, z=1)):
     if points1.shape[0] != points2.shape[0]:
         raise ValueError("Point clouds are not the same length")
 
@@ -1068,7 +1169,211 @@ def plot_specific_region_connections(points1, points2, faces1, faces2, G, region
     )
     fig.update_layout(
         scene_camera=dict(
-            eye=dict(x=2.5, y=2.5, z=2.5)
+            eye=cam
         )
     )
     return fig
+
+
+def plot_arr_no_clutter(arr, color=None, colorbar=False, size=None, cam = dict(x=0, y=2.5, z=1)):
+    fig = go.Figure()
+
+    x = arr[:, 0]
+    y = arr[:, 1]
+    z = arr[:, 2]
+
+    if color is None:
+        color = z
+
+    if size is None:
+        size = 2
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=x,
+            y=y,
+            z=z,
+            mode="markers",
+            marker=dict(
+                color=color,
+                size=size,
+                showscale=colorbar,
+                colorscale="Plotly3",
+                opacity=1.0,
+            ),
+        )
+    )
+
+    fig.update_layout(
+        scene=dict(
+            aspectmode="data",
+            xaxis=dict(
+                visible=False,
+                showbackground=False,
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                title=""
+            ),
+            yaxis=dict(
+                visible=False,
+                showbackground=False,
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                title=""
+            ),
+            zaxis=dict(
+                visible=False,
+                showbackground=False,
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                title=""
+            ),
+            camera=dict(eye=cam),
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=0, r=0, t=0, b=0),
+        width=600,
+        height=1000,
+        showlegend=False,
+    )
+
+    return fig
+
+def plot_3d_points_and_connections_region_matched_no_clutter(points1, points2, faces1, faces2, G, switch_yz = False, plot_both = True, width = 600, height = 1000,  cam = dict(x=2.5, y=2.5, z=2.5)):
+    """
+    Given points1, points2, and G, plot the points and lines between matching points. If switch_xz is true then this will switch the x and z coordinates before plotting (since by default in the mocap data the x is the vertical axis).
+    points1, points2: Nx3 arrays
+    G: NxN array
+    switch_xz: Boolean
+    """
+    if points1.shape[0] != points2.shape[0]:
+        raise ValueError("Point clouds are not the same length")
+
+    if G.shape[0] != G.shape[1]:
+        raise ValueError("Matching matrix is not square")
+
+    if G.shape[0] != points1.shape[0]:
+        raise ValueError("Matching matrix dimensions don't match point cloud dimensions")
+
+    if np.count_nonzero(G) > points1.shape[0]:
+        raise ValueError("Matching has too many nonzero entries")
+
+    if np.count_nonzero(G) < points1.shape[0]:
+        raise ValueError("Matching has too few nonzero entries")
+
+    print("Region accuracy adjusted:", region_accuracy_adjusted(G, faces1, faces2))
+
+    x_ind = 0
+    if switch_yz:
+        y_ind = 2
+        z_ind = 1
+    else:
+        y_ind = 1
+        z_ind = 2
+
+    # Ensure numpy arrays
+    points1 = np.asarray(points1)
+    points2 = np.asarray(points2)
+    G = np.asarray(G)
+
+    fig = go.Figure()
+
+    regions1 = faces_to_regions(faces1)
+    regions2 = faces_to_regions(((G / G.max()) @ faces2).astype(int))
+    color1 = ["red" if regions1[i] != regions2[i] else "green" for i in range(len(regions1))]
+
+    # Plot first set of 3D points
+    fig.add_trace(go.Scatter3d(
+        x=points1[:, x_ind], y=points1[:, y_ind], z=points1[:, z_ind],
+        mode='markers',
+        marker=dict(size=5, color=color1),
+        name='Points 1'
+    ))
+
+    if plot_both:
+        regions1 = faces_to_regions(((G.T / G.max()) @ faces1).astype(int))
+        regions2 = faces_to_regions(faces2)
+        color2 = ["red" if regions1[i] != regions2[i] else "green" for i in range(len(regions1))]
+
+    
+        # Plot second set of 3D points
+        fig.add_trace(go.Scatter3d(
+            x=points2[:, x_ind], y=points2[:, y_ind], z=points2[:, z_ind],
+            mode='markers',
+            marker=dict(size=5, color= color2),
+            name='Points 2'
+        ))
+
+
+        # Draw connections for nonzero G[i, j]
+        for i in range(G.shape[0]):
+            for j in range(G.shape[1]):
+                if G[i, j] != 0:
+                    p1 = points1[i]
+                    p2 = points2[j]
+                    fig.add_trace(go.Scatter3d(
+                        x=[p1[x_ind], p2[x_ind]],
+                        y=[p1[y_ind], p2[y_ind]],
+                        z=[p1[z_ind], p2[z_ind]],
+                        mode='lines',
+                        line=dict(color="gray", width=2),
+                        showlegend=False,
+                        opacity=0.1
+                    ))
+
+    # Layout styling
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X',
+            yaxis_title='Y',
+            zaxis_title='Z',
+            aspectmode='data'
+        ),
+        title='3D Points with Connections',
+        template='plotly_white',
+        width = width,
+        height = height
+    )
+
+    fig.update_layout(
+        scene=dict(
+            aspectmode="data",
+            xaxis=dict(
+                visible=False,
+                showbackground=False,
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                title=""
+            ),
+            yaxis=dict(
+                visible=False,
+                showbackground=False,
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                title=""
+            ),
+            zaxis=dict(
+                visible=False,
+                showbackground=False,
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                title=""
+            ),
+            camera=dict(eye=cam),
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=0, r=0, t=0, b=0),
+        width=width,
+        height=height,
+        showlegend=False,
+    )
+    return fig
+
