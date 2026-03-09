@@ -58,3 +58,16 @@ Deactivate when finished:
 ```bash
 conda deactivate
 ```
+
+## Running Experiments
+Our file for running experiments is called *experiments.py*. In that file are a number of functions, each of which runs a different experiment. The purpose of each is as follows:
+* left_right_augmentation - **This is the main one** used for the results in the paper and on the poster. It compares a baseline of optimal transport on the raw data to our method of optimal transport on augmented 4d data.
+* run_test - Archaic experiment using a method that we were investigating but didn't end up using.
+* acc_by_delta_per_alpha - Experiment investigating combining graph distance and Euclidean distance. Did not end up in final report.
+* naive_vs_novel_comparison - Similar to the previous one. Did not end up in final report.
+* novel_component_comparison - Comparison of combinations of methods. Did not end up in final report
+* fused_gromov_experiment_by_alpha - Experiment to see if fused gromov wasserstein with different alpha values would outperform the baseline. Did not seem to help; did not end up in final report.
+* left_right_augmentation_relative - Same experiment as the main one but with slightly different plots. Instead of averaging each method separately, we first compare performance and then average the relative performance. Didn't reveal much new information; did not end up in final report.
+* left_right_augmented_fgw - Another FGW experiment. Did not end up in final report.
+
+The experiments take a *num_poses* and a *timedeltas* argument. The first one is the number of random initial point clouds. The timedeltas is an iterable of future values. So if *num_poses* is 2 then two initial point clouds will be sampled across all the actions. Then if *timedeltas* is [10, 20, 30] then those 2 initial frames will be matched with the frames 10, 20, and 30 frames into the future. So a total of 8 point clouds would be sampled in total. For the graphics in the poster and report, *num_poses* was set to 20 and *timedeltas* was set to *np.arange(20, 91, 10)*.
