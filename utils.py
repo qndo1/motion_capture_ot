@@ -567,6 +567,8 @@ def region_accuracy_adjusted(G, faces1, faces2):
     else:
         possible_correct = 0
         for i in range(region_counts1[0].size):
+            print(region_counts1[0][i])
+            print(region_counts2[0][i])
             possible_correct += min(
                 region_counts1[1][i], region_counts2[1][i]
             )
@@ -1315,7 +1317,7 @@ def plot_3d_points_and_connections_region_matched_no_clutter(points1, points2, f
                 if G[i, j] != 0:
                     p1 = points1[i]
                     p2 = points2[j]
-                    fig.add_trace(go.Scatter3d(
+                    fig.add_cltrace(go.Scatter3d(
                         x=[p1[x_ind], p2[x_ind]],
                         y=[p1[y_ind], p2[y_ind]],
                         z=[p1[z_ind], p2[z_ind]],
