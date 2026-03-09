@@ -46,6 +46,22 @@ conda activate amass-env
 pip install -r requirements.txt
 ```
 
+These are our versions:
+```
+numpy==1.26.4
+pandas==2.1.1
+matplotlib==3.8.1
+plotly==6.1.2
+scipy==1.11.3
+scikit-learn==1.3.1
+POT==0.9.1
+smplx==0.1.28
+trimesh==4.11.0
+requests==2.30.0
+beautifulsoup4==4.12.2
+nbformat==5.10.4
+```
+
 Optional verification:
 
 ```bash
@@ -60,7 +76,7 @@ conda deactivate
 ```
 
 ## Running Experiments
-Our file for running experiments is called *experiments.py*. In that file are a number of functions, each of which runs a different experiment. The purpose of each is as follows:
+Our file for running experiments is called *experiments.py*. Simply run that file with Python in the terminal. It will print progress occasionally and should result in plots resembling the ones in our poster/report (although with the randomness it won't be the exact same). In that file are a number of functions, each of which runs a different experiment. The purpose of each is as follows:
 * left_right_augmentation - **This is the main one** used for the results in the paper and on the poster. It compares a baseline of optimal transport on the raw data to our method of optimal transport on augmented 4d data.
 * run_test - Archaic experiment using a method that we were investigating but didn't end up using.
 * acc_by_delta_per_alpha - Experiment investigating combining graph distance and Euclidean distance. Did not end up in final report.
