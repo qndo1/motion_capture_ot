@@ -1,5 +1,15 @@
 # Body Region Matching with High Density Point Clouds
 
+## Problem Statement
+
+Motion capture systems typically rely on markers to track the same body points across time. But in many real-world sensing systems such as LiDAR or dense 3D scans, these point identities are unknown. This makes it difficult to understand how a human body moves between frames.
+
+Our project develops a method for matching human body point clouds across time **without relying on fixed point identities**. Using **optimal transport**, we compute correspondences between frames by treating point clouds as probability distributions.
+
+To resolve common errors caused by body symmetry, we introduce a **4D embedding** that encodes a left–right body coordinate using automatically detected foot anchor points. This allows the algorithm to distinguish between symmetric structures such as the left and right legs.
+
+The result is a more reliable way to track motion in **markerless 3D human data**, which could improve applications in biomechanics, robotics, animation, and motion analysis.
+
 ## File Structure:
 
 ```bash
